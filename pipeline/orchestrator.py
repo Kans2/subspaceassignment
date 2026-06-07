@@ -43,10 +43,10 @@ class RunResult:
 
 
 class Orchestrator:
-    def __init__(self, source, prospeo, eazyreach, brevo, config: Config, logger: Logger):
+    def __init__(self, source, prospeo, resolver, brevo, config: Config, logger: Logger):
         self.source = source  # Stage 1 provider (Apollo or Ocean), same interface
         self.prospeo = prospeo
-        self.eazyreach = eazyreach
+        self.resolver = resolver  # Stage 3 email resolver (Prospeo enrich-person)
         self.brevo = brevo
         self.cfg = config
         self.log = logger
@@ -65,9 +65,13 @@ class Orchestrator:
                 self.cfg.stage1_provider, self.cfg.stage1_provider
             )
             self.log.stage(1, "Find lookalike companies", tool)
-            result.companies = self.source.find_lookalikes(
-                opts.seed_domain, opts.max_companies
-            )
+            try:
+                result.companies = self.source.find_lookalikes(
+                    opts.seed_domain, opts.max_companies
+                )
+            except Exception as exc:  # never let sourcing crash the program
+                self.log.error(f"Stage 1 sourcing failed: {exc}")
+                result.companies = []
         if not result.companies:
             self.log.error("No lookalike companies found — nothing to do.")
             return result
@@ -75,9 +79,13 @@ class Orchestrator:
         # ── Stage 2 · Prospeo ─────────────────────────────────────────────
         self.log.stage(2, "Find decision-makers", "Prospeo")
         for company in result.companies:
-            prospects = self.prospeo.find_decision_makers(
-                company, opts.max_contacts_per_company
-            )
+            try:
+                prospects = self.prospeo.find_decision_makers(
+                    company, opts.max_contacts_per_company
+                )
+            except Exception as exc:  # one bad company never stops the rest
+                self.log.warn(f"Skipping {company.clean_domain()}: {exc}")
+                continue
             result.prospects.extend(prospects)
         self.log.ok(
             f"{len(result.prospects)} decision-maker(s) across "
@@ -87,8 +95,8 @@ class Orchestrator:
             self.log.error("No decision-makers found — nothing to do.")
             return result
 
-        # ── Stage 3 · Eazyreach ───────────────────────────────────────────
-        self.log.stage(3, "Resolve work emails", "Eazyreach")
+        # ── Stage 3 · Prospeo enrich-person ───────────────────────────────
+        self.log.stage(3, "Resolve work emails", "Prospeo")
         seen_emails: set[str] = set()
         for prospect in result.prospects:
             if len(result.contacts) >= opts.max_emails:
@@ -96,7 +104,11 @@ class Orchestrator:
                     f"Reached email cap ({opts.max_emails}); skipping the rest."
                 )
                 break
-            contact = self.eazyreach.resolve_email(prospect)
+            try:
+                contact = self.resolver.resolve_email(prospect)
+            except Exception as exc:  # one bad prospect never stops the rest
+                self.log.warn(f"Skipping {prospect.full_name}: {exc}")
+                continue
             if not contact:
                 continue
             if contact.email in seen_emails:
@@ -121,7 +133,12 @@ class Orchestrator:
         self.log.stage(4, "Send personalized outreach", "Brevo")
         effective_dry = opts.dry_run or opts.mock
         for contact in result.contacts:
-            self.brevo.send(contact, dry_run=effective_dry)
+            try:
+                self.brevo.send(contact, dry_run=effective_dry)
+            except Exception as exc:  # belt-and-suspenders; send() already guards
+                contact.sent = False
+                contact.send_error = str(exc)
+                self.log.error(f"Send failed for {contact.email}: {exc}")
             # In dry-run/mock nothing actually sends, so a render counts as a
             # success, not a failure — only real send errors are failures.
             if effective_dry or contact.sent:

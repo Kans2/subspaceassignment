@@ -7,7 +7,7 @@
     python main.py example.com --mock              # no keys / no network, fake data
     python main.py example.com --yes               # hands-off: skip the confirm prompt
 
-Stages:  Ocean.io → Prospeo → Eazyreach → Brevo
+Stages:  Apollo.io → Prospeo (search) → Prospeo (enrich) → Brevo
 """
 from __future__ import annotations
 
@@ -29,10 +29,10 @@ from pipeline.logging_utils import Logger, bold, red
 from pipeline.orchestrator import Orchestrator, RunOptions
 from pipeline.stages.apollo import ApolloStage
 from pipeline.stages.brevo import BrevoStage
-from pipeline.stages.eazyreach import EazyreachStage
-from pipeline.stages.mock import MockEazyreach, MockProspeo, MockSource
+from pipeline.stages.mock import MockEmailResolver, MockProspeo, MockSource
 from pipeline.stages.ocean import OceanStage
 from pipeline.stages.prospeo import ProspeoStage
+from pipeline.stages.prospeo_email import ProspeoEmailStage
 
 
 def clean_seed(domain: str) -> str:
@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="outreach",
         description="Automated cold-outreach pipeline: one seed domain in, "
-        "personalized emails out (Ocean.io → Prospeo → Eazyreach → Brevo).",
+        "personalized emails out (Apollo.io → Prospeo → Prospeo → Brevo).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.mock:
-        source, prospeo, eazyreach = MockSource(), MockProspeo(), MockEazyreach()
+        source, prospeo, resolver = MockSource(), MockProspeo(), MockEmailResolver()
     else:
         # Stage 1 is swappable: Apollo (default) or Ocean.io, same interface.
         if cfg.stage1_provider == "ocean":
@@ -135,10 +135,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             source = ApolloStage(cfg, http, log)
         prospeo = ProspeoStage(cfg, http, log)
-        eazyreach = EazyreachStage(cfg, http, log)
+        resolver = ProspeoEmailStage(cfg, http, log)  # Stage 3: email resolution
     brevo = BrevoStage(cfg, http, log)  # used in dry-run/mock without sending
 
-    orch = Orchestrator(source, prospeo, eazyreach, brevo, cfg, log)
+    orch = Orchestrator(source, prospeo, resolver, brevo, cfg, log)
     try:
         result = orch.run(opts)
     except APIError as exc:
@@ -148,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
         print()
         log.warn("Interrupted by user.")
         return 130
+    except Exception as exc:  # last-resort guard: clean message, no raw traceback
+        log.error(f"Unexpected error: {exc}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
 
     if result.aborted:
         return 0

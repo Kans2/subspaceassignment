@@ -4,7 +4,7 @@ Docs: POST https://api.prospeo.io/search-person
 Auth: header ``X-KEY: <key>``.
 We use *search-person* (not domain-search) on purpose: it filters by seniority
 and returns the LinkedIn URL + job title without spending an email credit —
-email resolution is Stage 3's job (Eazyreach). 25 results/page, ``page`` paged.
+email resolution is Stage 3's job (enrich-person). 25 results/page, ``page`` paged.
 
 Body:
   { "page": 1,
@@ -63,7 +63,13 @@ class ProspeoStage:
                     PROSPEO_SEARCH_URL, json=body, headers=self._headers()
                 )
             except APIError as exc:
-                self.log.warn(f"Prospeo lookup failed for {domain}: {exc}")
+                # Prospeo returns 400 / NO_RESULTS when a domain simply has no
+                # matching people — that's normal, not a failure. Skip quietly.
+                code = exc.body.get("error_code", "") if isinstance(exc.body, dict) else ""
+                if exc.status == 400 and code == "NO_RESULTS":
+                    self.log.debug(f"{domain}: no people match the filters")
+                else:
+                    self.log.warn(f"Prospeo lookup failed for {domain}: {exc}")
                 break
 
             if data.get("error"):

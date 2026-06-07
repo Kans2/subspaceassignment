@@ -4,10 +4,10 @@ One seed domain in → personalized cold emails out. Zero humans in the loop
 after the input (except one deliberate safety checkpoint before anything sends).
 
 ```
-  company.domain ─▶ Apollo.io ─▶ Prospeo ─▶ Eazyreach ─▶ Brevo ─▶ ✉ sent
-                  (or Ocean.io)
-                    lookalike    decision    work          send
-                    companies    makers +    emails        outreach
+  company.domain ─▶ Apollo.io ─▶ Prospeo ──────▶ Prospeo ─────▶ Brevo ─▶ ✉ sent
+                  (or Ocean.io)  search-person   enrich-person
+                    lookalike    decision        verified       send
+                    companies    makers +        work emails    outreach
                                  LinkedIn
 ```
 
@@ -55,7 +55,7 @@ python main.py stripe.com
 | 1 | Find lookalike companies | **Apollo.io** *(default)* | seed domain → similar company domains | `GET /organizations/enrich` + `POST /organizations/search` |
 | 1 | _alternative_ | **Ocean.io** | same | `POST api.ocean.io/v2/search/companies` |
 | 2 | Find decision-makers | **Prospeo** | domain → C-suite/VP + LinkedIn URLs | `POST api.prospeo.io/search-person` |
-| 3 | Resolve work emails | **Eazyreach** | LinkedIn URL → verified work email | `POST api.superflow.run/b2b/linkedin-emails` |
+| 3 | Resolve work emails | **Prospeo** | LinkedIn/name → verified work email | `POST api.prospeo.io/enrich-person` |
 | 4 | Send outreach | **Brevo** | email → personalized mail sent | `POST api.brevo.com/v3/smtp/email` |
 
 **How Apollo does "lookalike" (no single endpoint for it).** Two documented
@@ -69,10 +69,17 @@ once by dropping the size filter. Auth is `X-Api-Key`; both endpoints work on
 Apollo's **free** plan (the richer `mixed_companies/search` is paywalled, so we
 use `organizations/search`).
 
-**Why Prospeo `search-person` and not `domain-search`?** `search-person`
+**Two Prospeo endpoints, one per stage.** Stage 2 uses `search-person` — it
 filters by seniority and returns the LinkedIn URL + job title *without spending
-an email credit*. Email resolution is Stage 3's job (Eazyreach), so this keeps
-the chain clean and avoids paying twice for the same address.
+an email credit*. Stage 3 then uses `enrich-person` on each result (sending the
+LinkedIn URL **and** name + company) to reveal the verified work email. Splitting
+it this way means we only spend an email credit on people we actually decided to
+contact. `only_verified_email=true` keeps undeliverable guesses out of the batch.
+
+> Stage 3 originally used Eazyreach (the brief's named tool). Its API works
+> (two-step client-credentials auth, see git history), but the provided account
+> had no credits, so the pipeline now resolves emails with Prospeo's
+> `enrich-person` — one fewer dependency and no extra credits to manage.
 
 ---
 
@@ -90,8 +97,8 @@ pipeline/
   stages/
     apollo.py               Stage 1 (default)
     ocean.py                Stage 1 (alternative)
-    prospeo.py              Stage 2
-    eazyreach.py            Stage 3
+    prospeo.py              Stage 2 (search-person)
+    prospeo_email.py        Stage 3 (enrich-person)
     brevo.py                Stage 4
     mock.py                 fake stages for --mock
 ```
@@ -128,7 +135,7 @@ by a human.
 
 **Integrations done right.**
 - *Auth* — each stage uses that tool's real scheme: Apollo `X-Api-Key`, Ocean
-  `X-Api-Token`, Prospeo `X-KEY`, Brevo `api-key`, Eazyreach configurable header.
+  `X-Api-Token`, Prospeo `X-KEY` (Stages 2 & 3), Brevo `api-key`.
 - *Pagination* — Apollo pages by `page`/`per_page` via `pagination.total_pages`;
   Ocean pages by `from`/`size`; Prospeo pages by `page` via `pagination.total_page`.
 - *Error handling* — all wired through `http_client.py`.
@@ -143,9 +150,10 @@ by a human.
 - **De-duplication**: companies deduped by domain (seed excluded); prospects by
   LinkedIn URL; contacts by email — so the same person surfaced twice is mailed
   once.
-- **Undeliverable / missing**: prospects with no LinkedIn URL are skipped before
-  Stage 3; Eazyreach misses (no email found) are dropped; Brevo send failures
-  are recorded per-contact and the batch continues.
+- **Undeliverable / missing**: a `400 NO_RESULTS` from Prospeo (a company with
+  no matching people, or a person with no verified email) is treated as "empty",
+  not an error; contacts without a verified email are dropped; Brevo send
+  failures are recorded per-contact and the batch continues.
 
 **Good judgment.**
 - A **safety checkpoint** prints the full recipient table and asks for
@@ -163,18 +171,18 @@ your own product.
 
 ## Configuration
 
-All keys and tunables live in `.env` (see `.env.example`). The four credentials
-plus `SENDER_EMAIL` are required for a live run; `--mock` needs none.
+All keys and tunables live in `.env` (see `.env.example`). For a live run you
+need **three** credentials — `APOLLO_API_KEY` (or `OCEAN_API_TOKEN`),
+`PROSPEO_API_KEY`, `BREVO_API_KEY` — plus a verified `SENDER_EMAIL`. `--mock`
+needs none.
 
-### A note on Eazyreach
+### A note on Stage 3 (email resolution)
 
-Eazyreach's API (docs.eazyreach.app) is served by **superflow.run**:
-`POST https://api.superflow.run/b2b/linkedin-emails`, `Authorization: Bearer`,
-body `{ "linkedinUrl": "..." }`, returning an `emails` array where each entry is
-`verified` or `probable`. The parser prefers a verified address over a probable
-one. The request shape is still `.env`-driven (base URL / endpoint / header /
-input field) so it's easy to adjust, and error codes are handled explicitly —
-notably **402 (insufficient balance)** prints a clear "top up credits" message.
+Stage 3 calls Prospeo's `enrich-person` with `only_verified_email=true`. The
+verified address lives at `person.email.email` with a `status` of `VERIFIED`;
+if `revealed` is false or no address comes back, the contact is dropped. Set
+`PROSPEO_ONLY_VERIFIED=false` in `.env` to also accept "probable" addresses
+(higher yield, lower deliverability).
 
 ---
 

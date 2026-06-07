@@ -52,13 +52,9 @@ class Config:
     stage1_provider: str = "apollo"
     apollo_auth_header: str = "X-Api-Key"
 
-    # ── Eazyreach / superflow (client-credentials → bearer token) ──
-    eazyreach_client_id: str = ""
-    eazyreach_client_secret: str = ""
-    eazyreach_base_url: str = "https://api.superflow.run"
-    eazyreach_auth_endpoint: str = "/b2b/createAuthToken/"
-    eazyreach_email_endpoint: str = "/b2b/linkedin-emails"
-    eazyreach_input_field: str = "linkedinUrl"
+    # ── Stage 3 · Prospeo enrich-person ──
+    # Only accept verified addresses (keeps undeliverable guesses out of the batch).
+    prospeo_only_verified: bool = True
 
     # ── Sender identity (Brevo) ──
     sender_email: str = ""
@@ -82,18 +78,9 @@ class Config:
             apollo_auth_header=os.getenv("APOLLO_AUTH_HEADER", "X-Api-Key").strip(),
             prospeo_key=os.getenv("PROSPEO_API_KEY", "").strip(),
             brevo_key=os.getenv("BREVO_API_KEY", "").strip(),
-            eazyreach_client_id=os.getenv("EAZYREACH_CLIENT_ID", "").strip(),
-            eazyreach_client_secret=os.getenv("EAZYREACH_CLIENT_SECRET", "").strip(),
-            eazyreach_base_url=os.getenv(
-                "EAZYREACH_BASE_URL", "https://api.superflow.run"
-            ).rstrip("/"),
-            eazyreach_auth_endpoint=os.getenv(
-                "EAZYREACH_AUTH_ENDPOINT", "/b2b/createAuthToken/"
-            ),
-            eazyreach_email_endpoint=os.getenv(
-                "EAZYREACH_EMAIL_ENDPOINT", "/b2b/linkedin-emails"
-            ),
-            eazyreach_input_field=os.getenv("EAZYREACH_INPUT_FIELD", "linkedinUrl"),
+            prospeo_only_verified=os.getenv(
+                "PROSPEO_ONLY_VERIFIED", "true"
+            ).strip().lower() not in ("false", "0", "no"),
             sender_email=os.getenv("SENDER_EMAIL", "").strip(),
             sender_name=os.getenv("SENDER_NAME", "").strip(),
             max_companies=_int("MAX_COMPANIES", 10),
@@ -121,10 +108,6 @@ class Config:
                     missing.append("APOLLO_API_KEY")
         if not self.prospeo_key:
             missing.append("PROSPEO_API_KEY")
-        if not self.eazyreach_client_id:
-            missing.append("EAZYREACH_CLIENT_ID")
-        if not self.eazyreach_client_secret:
-            missing.append("EAZYREACH_CLIENT_SECRET")
         if not self.brevo_key:
             missing.append("BREVO_API_KEY")
         if not self.sender_email:

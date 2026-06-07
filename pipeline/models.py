@@ -44,7 +44,7 @@ class Prospect:
 
 @dataclass
 class Contact:
-    """A prospect resolved to a deliverable email by Stage 3 (Eazyreach)."""
+    """A prospect resolved to a deliverable email by Stage 3 (Prospeo enrich)."""
 
     prospect: Prospect
     email: str

@@ -50,11 +50,13 @@ class MockProspeo:
         return out
 
 
-class MockEazyreach:
+class MockEmailResolver:
+    """Stand-in for Stage 3 (Prospeo enrich-person) — fakes email resolution."""
+
     def resolve_email(self, prospect: Prospect) -> Optional[Contact]:
         if not prospect.linkedin_url:
             return None
-        # simulate Eazyreach occasionally failing to find an address
+        # simulate occasionally failing to find an address
         if prospect.last_name.lower() == "garcia":
             return None
         local = f"{prospect.first_name}.{prospect.last_name}".lower()
