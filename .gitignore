@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env.example
+.env
+
+# Secrets & local config
+.env
+*.local
+
+# Pipeline run artifacts
+out/
+runs/
+*.run.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
